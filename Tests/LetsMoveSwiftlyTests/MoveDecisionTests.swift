@@ -16,6 +16,30 @@ final class MoveDecisionTests: XCTestCase {
         super.tearDown()
     }
 
+    // MARK: - shouldOfferToMove: Sandbox Detection
+
+    func testSkipsWhenRunningInSandbox() {
+        let result = LetsMoveSwiftly.shouldOfferToMove(
+            bundlePath: "/Users/test/Downloads/MyApp.app",
+            receiptURL: nil,
+            defaults: defaults,
+            isSandboxed: true
+        )
+
+        XCTAssertFalse(result, "Should skip when running in the app sandbox")
+    }
+
+    func testOffersToMoveWhenNotSandboxed() {
+        let result = LetsMoveSwiftly.shouldOfferToMove(
+            bundlePath: "/Users/test/Downloads/MyApp.app",
+            receiptURL: nil,
+            defaults: defaults,
+            isSandboxed: false
+        )
+
+        XCTAssertTrue(result, "Should offer to move when not sandboxed")
+    }
+
     // MARK: - shouldOfferToMove: App Store Detection
 
     func testSkipsWhenAppStoreReceiptExistsOnDisk() throws {
@@ -27,7 +51,8 @@ final class MoveDecisionTests: XCTestCase {
         let result = LetsMoveSwiftly.shouldOfferToMove(
             bundlePath: "/Users/test/Downloads/MyApp.app",
             receiptURL: temporaryReceipt,
-            defaults: defaults
+            defaults: defaults,
+            isSandboxed: false
         )
 
         XCTAssertFalse(result, "Should skip when App Store receipt exists on disk")
@@ -39,7 +64,8 @@ final class MoveDecisionTests: XCTestCase {
         let result = LetsMoveSwiftly.shouldOfferToMove(
             bundlePath: "/Users/test/Downloads/MyApp.app",
             receiptURL: missingReceipt,
-            defaults: defaults
+            defaults: defaults,
+            isSandboxed: false
         )
 
         XCTAssertTrue(result, "Should offer to move when receipt URL is set but file doesn't exist")
@@ -49,7 +75,8 @@ final class MoveDecisionTests: XCTestCase {
         let result = LetsMoveSwiftly.shouldOfferToMove(
             bundlePath: "/Users/test/Downloads/MyApp.app",
             receiptURL: nil,
-            defaults: defaults
+            defaults: defaults,
+            isSandboxed: false
         )
 
         XCTAssertTrue(result, "Should offer to move when receipt URL is nil")
@@ -61,7 +88,8 @@ final class MoveDecisionTests: XCTestCase {
         let result = LetsMoveSwiftly.shouldOfferToMove(
             bundlePath: "/Applications/MyApp.app",
             receiptURL: nil,
-            defaults: defaults
+            defaults: defaults,
+            isSandboxed: false
         )
 
         XCTAssertFalse(result, "Should skip when already in /Applications")
@@ -71,7 +99,8 @@ final class MoveDecisionTests: XCTestCase {
         let result = LetsMoveSwiftly.shouldOfferToMove(
             bundlePath: "/Applications/Utilities/MyApp.app",
             receiptURL: nil,
-            defaults: defaults
+            defaults: defaults,
+            isSandboxed: false
         )
 
         XCTAssertFalse(result, "Should skip when in /Applications subfolder")
@@ -83,7 +112,8 @@ final class MoveDecisionTests: XCTestCase {
         let result = LetsMoveSwiftly.shouldOfferToMove(
             bundlePath: userApplicationsPath,
             receiptURL: nil,
-            defaults: defaults
+            defaults: defaults,
+            isSandboxed: false
         )
 
         XCTAssertFalse(result, "Should skip when in ~/Applications")
@@ -97,7 +127,8 @@ final class MoveDecisionTests: XCTestCase {
         let result = LetsMoveSwiftly.shouldOfferToMove(
             bundlePath: "/Users/test/Downloads/MyApp.app",
             receiptURL: nil,
-            defaults: defaults
+            defaults: defaults,
+            isSandboxed: false
         )
 
         XCTAssertFalse(result, "Should skip when user previously chose 'Don't Move'")
@@ -109,7 +140,8 @@ final class MoveDecisionTests: XCTestCase {
         let result = LetsMoveSwiftly.shouldOfferToMove(
             bundlePath: "/Users/test/Downloads/MyApp.app",
             receiptURL: nil,
-            defaults: defaults
+            defaults: defaults,
+            isSandboxed: false
         )
 
         XCTAssertTrue(result, "Should offer to move when in Downloads")
@@ -119,7 +151,8 @@ final class MoveDecisionTests: XCTestCase {
         let result = LetsMoveSwiftly.shouldOfferToMove(
             bundlePath: "/Users/test/Desktop/MyApp.app",
             receiptURL: nil,
-            defaults: defaults
+            defaults: defaults,
+            isSandboxed: false
         )
 
         XCTAssertTrue(result, "Should offer to move when on Desktop")
