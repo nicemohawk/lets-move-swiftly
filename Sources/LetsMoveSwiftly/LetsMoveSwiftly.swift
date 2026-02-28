@@ -62,6 +62,7 @@ public enum LetsMoveSwiftly {
     /// Determines whether the app should offer to move to `/Applications/`.
     ///
     /// Returns `false` when any of these conditions are met:
+    /// - The app is running inside the macOS app sandbox (sandboxed apps cannot move themselves)
     /// - The app was installed from the Mac App Store (a valid receipt file exists on disk)
     /// - The app is already running from `/Applications/` or `~/Applications/`
     /// - The user previously chose "Don't Move"
@@ -74,13 +75,23 @@ public enum LetsMoveSwiftly {
     ///   - receiptURL: The App Store receipt URL. Defaults to `Bundle.main.appStoreReceiptURL`.
     ///   - fileManager: The file manager used to check file existence. Defaults to `.default`.
     ///   - defaults: The user defaults store for the "don't ask again" flag. Defaults to `.standard`.
+    ///   - isSandboxed: Whether the app is running in the macOS app sandbox. Defaults to runtime detection.
     /// - Returns: `true` if the app should prompt the user to move.
     public static func shouldOfferToMove(
         bundlePath: String = Bundle.main.bundlePath,
         receiptURL: URL? = Bundle.main.appStoreReceiptURL,
         fileManager: FileManager = .default,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        isSandboxed: Bool = ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
     ) -> Bool {
+        // Sandboxed apps cannot perform the file operations needed to move themselves.
+        // This covers App Store builds, development builds with sandbox enabled, and any
+        // other sandboxed context. The admin-privilege fallback (NSAppleScript) is also
+        // blocked by the sandbox, so there's no point in prompting.
+        if isSandboxed {
+            return false
+        }
+
         // App Store installations always land in /Applications — no prompt needed.
         // We check that the receipt file actually exists on disk, not just the URL property,
         // because non-App Store builds may still have a receiptURL that points nowhere.
