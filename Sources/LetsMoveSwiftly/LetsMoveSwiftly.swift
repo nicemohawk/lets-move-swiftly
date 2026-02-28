@@ -198,13 +198,10 @@ public enum LetsMoveSwiftly {
             return .failed("Destination is not an .app bundle.")
         }
 
-        let sourcePath = source.path
-        let destinationPath = destination.path
-
-        // Shell command: remove any existing copy, then copy the bundle preserving permissions.
-        // Single-quotes around paths prevent shell injection from special characters in filenames.
-        let shellCommand = "rm -rf '\(destinationPath)' && cp -pR '\(sourcePath)' '\(destinationPath)'"
-        let appleScriptSource = "do shell script \"\(shellCommand)\" with administrator privileges"
+        let appleScriptSource = appleScriptForRelocate(
+            sourcePath: source.path,
+            destinationPath: destination.path
+        )
 
         guard let script = NSAppleScript(source: appleScriptSource) else {
             return .failed("Failed to create authorization script.")
@@ -224,6 +221,27 @@ public enum LetsMoveSwiftly {
         }
 
         return .success
+    }
+
+    // MARK: - AppleScript Command Builder
+
+    /// Builds the AppleScript source string for an admin-privileged relocate.
+    ///
+    /// Paths are escaped for both the shell layer (single quotes) and the AppleScript
+    /// string literal (backslashes and double quotes) to prevent injection.
+    static func appleScriptForRelocate(sourcePath: String, destinationPath: String) -> String {
+        func shellEscape(_ path: String) -> String {
+            path.replacingOccurrences(of: "'", with: "'\\''")
+        }
+
+        let shellCommand = "rm -rf '\(shellEscape(destinationPath))' && cp -pR '\(shellEscape(sourcePath))' '\(shellEscape(destinationPath))'"
+
+        // Escape characters significant in an AppleScript double-quoted string literal.
+        let escapedShellCommand = shellCommand
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+
+        return "do shell script \"\(escapedShellCommand)\" with administrator privileges"
     }
 
     // MARK: - Main Entry Point

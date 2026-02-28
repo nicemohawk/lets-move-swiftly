@@ -1,5 +1,6 @@
 # LetsMoveSwiftly
 
+[![CI](https://github.com/nicemohawk/lets-move-swiftly/actions/workflows/ci.yml/badge.svg)](https://github.com/nicemohawk/lets-move-swiftly/actions/workflows/ci.yml)
 [![Swift 5.9+](https://img.shields.io/badge/Swift-5.9%2B-F05138.svg)](https://swift.org)
 [![macOS 13+](https://img.shields.io/badge/macOS-13%2B-000000.svg)](https://www.apple.com/macos/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

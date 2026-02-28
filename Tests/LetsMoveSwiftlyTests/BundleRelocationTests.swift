@@ -133,6 +133,62 @@ final class BundleRelocationTests: XCTestCase {
         XCTAssertEqual(content, "new-version", "Old copy should be replaced with new one")
     }
 
+    // MARK: - AppleScript Command Builder
+
+    func testAppleScriptEscapesSingleQuotesInPaths() {
+        let script = LetsMoveSwiftly.appleScriptForRelocate(
+            sourcePath: "/tmp/Bob's App.app",
+            destinationPath: "/Applications/Bob's App.app"
+        )
+
+        // The shell escape produces '\'' which the AppleScript escape then doubles
+        // the backslash to '\\'' — AppleScript interprets \\\\ back to \\ at runtime,
+        // restoring the correct shell escape sequence.
+        XCTAssertTrue(script.contains("Bob'\\\\''s App.app"), "Single quotes should be shell-escaped")
+    }
+
+    func testAppleScriptEscapesDoubleQuotesInPaths() {
+        let script = LetsMoveSwiftly.appleScriptForRelocate(
+            sourcePath: "/tmp/My \"Cool\" App.app",
+            destinationPath: "/Applications/My \"Cool\" App.app"
+        )
+
+        // Double quotes must be escaped for the AppleScript string literal.
+        XCTAssertFalse(
+            script.contains("My \"Cool\""),
+            "Raw double quotes must not appear unescaped in the AppleScript string"
+        )
+        XCTAssertTrue(
+            script.contains("My \\\"Cool\\\""),
+            "Double quotes should be escaped for AppleScript"
+        )
+    }
+
+    func testAppleScriptEscapesBackslashesInPaths() {
+        let script = LetsMoveSwiftly.appleScriptForRelocate(
+            sourcePath: "/tmp/Back\\slash.app",
+            destinationPath: "/Applications/Back\\slash.app"
+        )
+
+        // Backslashes must be escaped for the AppleScript string literal.
+        XCTAssertTrue(
+            script.contains("Back\\\\slash.app"),
+            "Backslashes should be escaped for AppleScript"
+        )
+    }
+
+    func testAppleScriptPlainPathsProduceValidCommand() {
+        let script = LetsMoveSwiftly.appleScriptForRelocate(
+            sourcePath: "/tmp/TestApp.app",
+            destinationPath: "/Applications/TestApp.app"
+        )
+
+        XCTAssertTrue(script.hasPrefix("do shell script \""))
+        XCTAssertTrue(script.hasSuffix("\" with administrator privileges"))
+        XCTAssertTrue(script.contains("cp -pR"))
+        XCTAssertTrue(script.contains("rm -rf"))
+    }
+
     func testThrowsWhenDestinationIsNotWritable() throws {
         let appBundle = try createFakeAppBundle(in: "source")
         let destinationDirectory = try createDirectory("readonly-destination")
