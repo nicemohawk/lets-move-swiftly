@@ -6,7 +6,7 @@
 
 A lightweight Swift package that prompts users to move your macOS app to `/Applications/` on first launch.
 
-When macOS apps are launched from Downloads, Desktop, or a mounted DMG, [App Translocation](https://developer.apple.com/documentation/security/translocation) runs them from a randomized read-only path. This breaks auto-updates (Sparkle), file associations, and Spotlight indexing. LetsMoveSwiftly fixes this with a single line of code.
+When macOS apps are launched from Downloads, Desktop, or a mounted DMG, [App Translocation](https://developer.apple.com/documentation/security/translocation) runs them from a randomized read-only path. This breaks auto-updates, file associations, and Spotlight indexing. LetsMoveSwiftly fixes this with a single line of code.
 
 ## Installation
 
@@ -89,11 +89,11 @@ That's it. The call:
 
 ## Acknowledgments
 
-Inspired by [LetsMove](https://github.com/potionfactory/LetsMove) (public domain, Objective-C) and [AppMover](https://github.com/OskarGroth/AppMover) (Swift). Both libraries pioneered this pattern but lack Swift Package Manager support. LetsMoveSwiftly is a modern reimplementation built for SPM from the ground up.
+Inspired by [LetsMove](https://github.com/potionfactory/LetsMove) (public domain, Objective-C) and [AppMover](https://github.com/OskarGroth/AppMover) (Swift). Both libraries implemented this pattern but lack Swift Package Manager support. LetsMoveSwiftly is a simple, modern reimplementation built for SPM from the start.
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Moar PRs plz.
 
 ## License
 
