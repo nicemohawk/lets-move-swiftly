@@ -198,11 +198,13 @@ public enum LetsMoveSwiftly {
             return .failed("Destination is not an .app bundle.")
         }
 
-        let sourcePath = source.path
-        let destinationPath = destination.path
+        // Escape any single quotes in the paths so they are safe to embed in the
+        // single-quoted shell arguments below (replace ' with '\'').
+        let sourcePath = source.path.replacingOccurrences(of: "'", with: "'\\''")
+        let destinationPath = destination.path.replacingOccurrences(of: "'", with: "'\\''")
 
         // Shell command: remove any existing copy, then copy the bundle preserving permissions.
-        // Single-quotes around paths prevent shell injection from special characters in filenames.
+        // Paths are wrapped in single quotes and any embedded single quotes are escaped above.
         let shellCommand = "rm -rf '\(destinationPath)' && cp -pR '\(sourcePath)' '\(destinationPath)'"
         let appleScriptSource = "do shell script \"\(shellCommand)\" with administrator privileges"
 
