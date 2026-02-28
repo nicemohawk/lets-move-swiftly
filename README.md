@@ -93,7 +93,7 @@ Inspired by [LetsMove](https://github.com/potionfactory/LetsMove) (public domain
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Moar PRs plz.
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 

@@ -108,17 +108,8 @@ public enum LetsMoveSwiftly {
     /// - Returns: `true` if the path is inside an Applications folder.
     public static func isInApplicationsFolder(_ path: String) -> Bool {
         let normalizedPath = (path as NSString).standardizingPath
-
-        if normalizedPath.hasPrefix("/Applications/") {
-            return true
-        }
-
         let userApplicationsFolder = NSHomeDirectory() + "/Applications/"
-        if normalizedPath.hasPrefix(userApplicationsFolder) {
-            return true
-        }
-
-        return false
+        return normalizedPath.hasPrefix("/Applications/") || normalizedPath.hasPrefix(userApplicationsFolder)
     }
 
     // MARK: - File Operations

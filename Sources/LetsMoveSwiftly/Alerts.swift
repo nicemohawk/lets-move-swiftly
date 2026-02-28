@@ -60,7 +60,7 @@ enum Alerts {
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        _ = alert.runModal()
     }
 
     /// Launches the app from its new location and terminates the current process.
@@ -71,8 +71,8 @@ enum Alerts {
     static func relaunch(at url: URL) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        // Wait briefly for the current process to exit, then open the relocated app.
-        process.arguments = ["-c", "sleep 0.5 && open \"\(url.path)\""]
+        // Pass the app path as a positional argument ($1) to avoid shell injection.
+        process.arguments = ["-c", "sleep 0.5 && open \"$1\"", "--", url.path]
         try? process.run()
 
         NSApp.terminate(nil)
