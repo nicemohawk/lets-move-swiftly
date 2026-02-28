@@ -123,6 +123,24 @@ public enum LetsMoveSwiftly {
         return normalizedPath.hasPrefix("/Applications/") || normalizedPath.hasPrefix(userApplicationsFolder)
     }
 
+    // MARK: - Errors
+
+    /// An error thrown when `relocateBundle` fails to move/copy the bundle *and* the automatic
+    /// backup restoration also fails, leaving the destination in an uncertain state.
+    public struct RelocationError: Error, CustomStringConvertible {
+        /// The error from the failed relocation attempt.
+        public let relocationError: Error
+        /// The error from the failed backup restoration attempt.
+        public let restorationError: Error
+        /// The URL where the backup remains on disk.
+        public let backupURL: URL
+
+        public var description: String {
+            "Relocation failed (\(relocationError)) and backup restoration also failed"
+                + " (\(restorationError)); the existing app backup remains at \(backupURL.path)."
+        }
+    }
+
     // MARK: - File Operations
 
     /// Moves or copies the app bundle into the destination directory.
@@ -131,7 +149,9 @@ public enum LetsMoveSwiftly {
     /// the bundle is **moved**. When the source is read-only (e.g., a mounted DMG), the bundle is
     /// **copied** instead.
     ///
-    /// If an app with the same name already exists at the destination, it is removed first.
+    /// If an app with the same name already exists at the destination, it is moved aside to a
+    /// temporary backup before the operation. On success the backup is removed; on failure the
+    /// backup is restored, leaving the user's existing install intact.
     ///
     /// - Parameters:
     ///   - source: The current app bundle URL (e.g., `Bundle.main.bundleURL`).
@@ -147,17 +167,42 @@ public enum LetsMoveSwiftly {
     ) throws -> URL {
         let targetURL = destinationDirectory.appendingPathComponent(source.lastPathComponent)
 
-        // Remove an existing copy so the move/copy doesn't fail with "file exists".
+        // Move any existing app aside so we can restore it if the operation fails.
+        var backupURL: URL?
         if fileManager.fileExists(atPath: targetURL.path) {
-            try fileManager.removeItem(at: targetURL)
+            let backup = destinationDirectory
+                .appendingPathComponent("\(targetURL.lastPathComponent).backup-\(UUID().uuidString.prefix(8))")
+            try fileManager.moveItem(at: targetURL, to: backup)
+            backupURL = backup
         }
 
-        let sourceDirectory = source.deletingLastPathComponent().path
-        if fileManager.isWritableFile(atPath: sourceDirectory) {
-            try fileManager.moveItem(at: source, to: targetURL)
-        } else {
-            // Read-only source (e.g., mounted DMG) — copy instead.
-            try fileManager.copyItem(at: source, to: targetURL)
+        do {
+            let sourceDirectory = source.deletingLastPathComponent().path
+            if fileManager.isWritableFile(atPath: sourceDirectory) {
+                try fileManager.moveItem(at: source, to: targetURL)
+            } else {
+                // Read-only source (e.g., mounted DMG) — copy instead.
+                try fileManager.copyItem(at: source, to: targetURL)
+            }
+        } catch {
+            // Restore the backup so the user's existing install is not lost.
+            if let backup = backupURL {
+                do {
+                    try fileManager.moveItem(at: backup, to: targetURL)
+                } catch let restorationError {
+                    throw RelocationError(
+                        relocationError: error,
+                        restorationError: restorationError,
+                        backupURL: backup
+                    )
+                }
+            }
+            throw error
+        }
+
+        // Success — discard the backup.
+        if let backup = backupURL {
+            try? fileManager.removeItem(at: backup)
         }
 
         return targetURL

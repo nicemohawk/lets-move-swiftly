@@ -189,6 +189,42 @@ final class BundleRelocationTests: XCTestCase {
         XCTAssertTrue(script.contains("rm -rf"))
     }
 
+    func testRestoresExistingAppWhenRelocateFails() throws {
+        let appBundle = try createFakeAppBundle(in: "source", markerContent: "new-version")
+        let destinationDirectory = try createDirectory("destination")
+
+        // Place an "old" copy at the destination that should survive a failed relocation.
+        let existingApp = destinationDirectory.appendingPathComponent("TestApp.app")
+        try FileManager.default.createDirectory(at: existingApp, withIntermediateDirectories: true)
+        try "old-version".write(
+            to: existingApp.appendingPathComponent("Info.plist"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        // Make the destination read-only so the move into it will fail.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o555],
+            ofItemAtPath: destinationDirectory.path
+        )
+
+        XCTAssertThrowsError(
+            try LetsMoveSwiftly.relocateBundle(from: appBundle, to: destinationDirectory),
+            "Should throw when destination is not writable"
+        )
+
+        // The original app must still be present and unmodified.
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: existingApp.path),
+            "Existing app should be restored after a failed relocation"
+        )
+        let content = try String(
+            contentsOf: existingApp.appendingPathComponent("Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(content, "old-version", "Restored app should contain the original content")
+    }
+
     func testThrowsWhenDestinationIsNotWritable() throws {
         let appBundle = try createFakeAppBundle(in: "source")
         let destinationDirectory = try createDirectory("readonly-destination")
