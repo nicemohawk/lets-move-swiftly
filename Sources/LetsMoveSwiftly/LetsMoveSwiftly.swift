@@ -152,6 +152,69 @@ public enum LetsMoveSwiftly {
         return targetURL
     }
 
+    // MARK: - Authorized File Operations
+
+    /// The result of an authorized (admin-privileged) file operation.
+    public enum AuthorizedInstallResult: Sendable {
+        /// The operation succeeded.
+        case success
+        /// The user cancelled the authentication dialog.
+        case cancelled
+        /// The operation failed with an error description.
+        case failed(String)
+    }
+
+    /// Copies the app bundle to the destination using administrator privileges.
+    ///
+    /// This triggers the standard macOS authentication dialog (Touch ID / password) via
+    /// AppleScript's `do shell script ... with administrator privileges`. The system Security
+    /// framework handles the credential prompt — the app never sees the password.
+    ///
+    /// This is the same approach used by [AppMover](https://github.com/OskarGroth/AppMover)
+    /// and is the standard pattern for non-sandboxed macOS apps that need one-time privilege
+    /// escalation.
+    ///
+    /// - Parameters:
+    ///   - source: The current app bundle URL.
+    ///   - destination: The full target URL (e.g., `/Applications/MyApp.app`).
+    /// - Returns: The result of the operation.
+    public static func authorizedRelocateBundle(
+        from source: URL,
+        to destination: URL
+    ) -> AuthorizedInstallResult {
+        // Safety: only operate on .app bundles.
+        guard destination.pathExtension == "app" else {
+            return .failed("Destination is not an .app bundle.")
+        }
+
+        let sourcePath = source.path
+        let destinationPath = destination.path
+
+        // Shell command: remove any existing copy, then copy the bundle preserving permissions.
+        // Single-quotes around paths prevent shell injection from special characters in filenames.
+        let shellCommand = "rm -rf '\(destinationPath)' && cp -pR '\(sourcePath)' '\(destinationPath)'"
+        let appleScriptSource = "do shell script \"\(shellCommand)\" with administrator privileges"
+
+        guard let script = NSAppleScript(source: appleScriptSource) else {
+            return .failed("Failed to create authorization script.")
+        }
+
+        var errorInfo: NSDictionary?
+        script.executeAndReturnError(&errorInfo)
+
+        if let errorInfo {
+            // Error -128 is userCanceledErr — the user dismissed the auth dialog.
+            if (errorInfo[NSAppleScript.errorNumber] as? Int16) == -128 {
+                return .cancelled
+            }
+            let message = errorInfo[NSAppleScript.errorMessage] as? String
+                ?? "Authorization failed."
+            return .failed(message)
+        }
+
+        return .success
+    }
+
     // MARK: - Main Entry Point
 
     /// Checks whether the app should move to `/Applications/`, prompts the user, and handles
@@ -167,8 +230,11 @@ public enum LetsMoveSwiftly {
     /// - Shows a native `NSAlert` with three options: "Move to Applications", "Not Now",
     ///   and "Don't Move".
     /// - If an existing copy is found in `/Applications/`, shows a confirmation before replacing.
+    /// - Tries a standard `FileManager` move/copy first. If that fails (e.g., `/Applications/`
+    ///   requires admin privileges), falls back to an authenticated copy via AppleScript
+    ///   which presents the macOS Touch ID / password dialog.
     /// - After a successful move, relaunches the app from its new location.
-    /// - If the move fails, shows an error alert and continues running from the current location.
+    /// - If both approaches fail, shows an error alert and continues from the current location.
     ///
     /// ```swift
     /// // SwiftUI
@@ -197,20 +263,34 @@ public enum LetsMoveSwiftly {
         case .move:
             let source = URL(fileURLWithPath: Bundle.main.bundlePath)
             let applicationsDirectory = URL(fileURLWithPath: "/Applications")
+            let target = applicationsDirectory.appendingPathComponent(source.lastPathComponent)
 
             // If a copy already exists in /Applications, confirm replacement.
-            let target = applicationsDirectory.appendingPathComponent(source.lastPathComponent)
             if FileManager.default.fileExists(atPath: target.path) {
                 guard Alerts.showReplaceAlert(appName: appName) else { return }
             }
 
+            // Try the standard FileManager approach first (works when the user has write access).
             do {
                 let newURL = try relocateBundle(from: source, to: applicationsDirectory)
                 logger.info("Moved app to \(newURL.path)")
                 Alerts.relaunch(at: newURL)
+                return
             } catch {
-                logger.error("Failed to move app: \(error.localizedDescription)")
-                Alerts.showErrorAlert(message: error.localizedDescription)
+                logger.info("Standard move failed (\(error.localizedDescription)), requesting admin privileges")
+            }
+
+            // Fall back to an authenticated copy (triggers Touch ID / password prompt).
+            let result = authorizedRelocateBundle(from: source, to: target)
+            switch result {
+            case .success:
+                logger.info("Moved app to \(target.path) (with admin privileges)")
+                Alerts.relaunch(at: target)
+            case .cancelled:
+                logger.info("User cancelled authentication")
+            case .failed(let message):
+                logger.error("Authorized move failed: \(message)")
+                Alerts.showErrorAlert(message: message)
             }
         case .dontMove:
             UserDefaults.standard.set(true, forKey: dontAskAgainKey)
