@@ -1,5 +1,44 @@
+import Foundation
 import XCTest
 @testable import LetsMoveSwiftly
+
+// MARK: - Test Doubles
+
+/// A `FileManager` subclass that allows backup and restore moves but forces the
+/// relocation move/copy to fail, so tests can exercise the rollback/restore path.
+///
+/// Call sequence in `relocateBundle`:
+///   1. `moveItem` — backup (existing app → backup path) — allowed
+///   2. `moveItem`/`copyItem` — relocation (source → target) — **fails**
+///   3. `moveItem` — restore (backup → original path) — allowed
+private class RelocationFailingFileManager: FileManager {
+    private var moveCallCount = 0
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        moveCallCount += 1
+        if moveCallCount == 2 {
+            // Second moveItem is the relocation — force it to fail.
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileWriteNoPermissionError,
+                userInfo: [NSLocalizedDescriptionKey: "Simulated relocation failure"]
+            )
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+    }
+
+    override func copyItem(at srcURL: URL, to dstURL: URL) throws {
+        // If this is reached after backup, it's the relocation copy — fail it.
+        if moveCallCount >= 1 {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileWriteNoPermissionError,
+                userInfo: [NSLocalizedDescriptionKey: "Simulated relocation failure"]
+            )
+        }
+        try super.copyItem(at: srcURL, to: dstURL)
+    }
+}
 
 final class BundleRelocationTests: XCTestCase {
 
@@ -202,15 +241,17 @@ final class BundleRelocationTests: XCTestCase {
             encoding: .utf8
         )
 
-        // Make the destination read-only so the move into it will fail.
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o555],
-            ofItemAtPath: destinationDirectory.path
-        )
+        // Use a FileManager subclass that allows the backup move but forces the
+        // relocation move/copy to fail — exercising the actual rollback path.
+        let failingFileManager = RelocationFailingFileManager()
 
         XCTAssertThrowsError(
-            try LetsMoveSwiftly.relocateBundle(from: appBundle, to: destinationDirectory),
-            "Should throw when destination is not writable"
+            try LetsMoveSwiftly.relocateBundle(
+                from: appBundle,
+                to: destinationDirectory,
+                fileManager: failingFileManager
+            ),
+            "Should throw when relocation fails"
         )
 
         // The original app must still be present and unmodified.

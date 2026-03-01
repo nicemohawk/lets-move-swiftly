@@ -127,7 +127,7 @@ public enum LetsMoveSwiftly {
 
     /// An error thrown when `relocateBundle` fails to move/copy the bundle *and* the automatic
     /// backup restoration also fails, leaving the destination in an uncertain state.
-    public struct RelocationError: Error, CustomStringConvertible {
+    public struct RelocationError: LocalizedError {
         /// The error from the failed relocation attempt.
         public let relocationError: Error
         /// The error from the failed backup restoration attempt.
@@ -135,9 +135,14 @@ public enum LetsMoveSwiftly {
         /// The URL where the backup remains on disk.
         public let backupURL: URL
 
-        public var description: String {
-            "Relocation failed (\(relocationError)) and backup restoration also failed"
-                + " (\(restorationError)); the existing app backup remains at \(backupURL.path)."
+        public var errorDescription: String? {
+            "Relocation failed (\(relocationError.localizedDescription)) and backup restoration"
+                + " also failed (\(restorationError.localizedDescription));"
+                + " the existing app backup remains at \(backupURL.path)."
+        }
+
+        public var recoverySuggestion: String? {
+            "You can manually restore the previous version from \(backupURL.path)."
         }
     }
 
@@ -158,7 +163,9 @@ public enum LetsMoveSwiftly {
     ///   - destinationDirectory: The target directory (typically `/Applications`).
     ///   - fileManager: The file manager to use for file operations. Defaults to `.default`.
     /// - Returns: The URL of the app in its new location.
-    /// - Throws: Any `FileManager` error if the move/copy or cleanup fails.
+    /// - Throws: A `FileManager` error if the move/copy fails (the existing app is restored
+    ///   automatically), or a ``RelocationError`` if both the relocation *and* the backup
+    ///   restoration fail.
     @discardableResult
     public static func relocateBundle(
         from source: URL,
@@ -187,6 +194,11 @@ public enum LetsMoveSwiftly {
         } catch {
             // Restore the backup so the user's existing install is not lost.
             if let backup = backupURL {
+                // Remove any partially-written target (e.g. from an interrupted copy)
+                // so the backup can be moved back into place.
+                if fileManager.fileExists(atPath: targetURL.path) {
+                    try? fileManager.removeItem(at: targetURL)
+                }
                 do {
                     try fileManager.moveItem(at: backup, to: targetURL)
                 } catch let restorationError {
