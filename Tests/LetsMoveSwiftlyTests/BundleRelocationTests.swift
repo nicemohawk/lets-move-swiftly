@@ -225,7 +225,15 @@ final class BundleRelocationTests: XCTestCase {
         XCTAssertTrue(script.hasPrefix("do shell script \""))
         XCTAssertTrue(script.hasSuffix("\" with administrator privileges"))
         XCTAssertTrue(script.contains("cp -pR"))
-        XCTAssertTrue(script.contains("rm -rf"))
+        // The script should back up the existing app, not delete it outright.
+        XCTAssertTrue(
+            script.contains(".backup-"),
+            "Script should use a backup path for safe replacement"
+        )
+        XCTAssertTrue(
+            script.contains("mv"),
+            "Script should move (not delete) the existing app aside"
+        )
     }
 
     func testRestoresExistingAppWhenRelocateFails() throws {

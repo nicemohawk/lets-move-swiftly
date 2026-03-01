@@ -284,6 +284,11 @@ public enum LetsMoveSwiftly {
 
     /// Builds the AppleScript source string for an admin-privileged relocate.
     ///
+    /// The generated shell script moves any existing app aside to a backup path before
+    /// copying the new bundle. On success the backup is removed; on failure any partial
+    /// copy is cleaned up and the backup is restored, mirroring the safety pattern used
+    /// by ``relocateBundle(from:to:fileManager:)``.
+    ///
     /// Paths are escaped for both the shell layer (single quotes) and the AppleScript
     /// string literal (backslashes and double quotes) to prevent injection.
     static func appleScriptForRelocate(sourcePath: String, destinationPath: String) -> String {
@@ -291,7 +296,22 @@ public enum LetsMoveSwiftly {
             path.replacingOccurrences(of: "'", with: "'\\''")
         }
 
-        let shellCommand = "rm -rf '\(shellEscape(destinationPath))' && cp -pR '\(shellEscape(sourcePath))' '\(shellEscape(destinationPath))'"
+        let escapedSource = shellEscape(sourcePath)
+        let escapedDestination = shellEscape(destinationPath)
+        let backupSuffix = UUID().uuidString.prefix(8)
+        let escapedBackup = shellEscape("\(destinationPath).backup-\(backupSuffix)")
+
+        let shellCommand = [
+            "BACKUP='\(escapedBackup)'",
+            "if [ -e '\(escapedDestination)' ]; then mv '\(escapedDestination)' \"$BACKUP\"; else BACKUP=''; fi",
+            "if cp -pR '\(escapedSource)' '\(escapedDestination)'; then"
+                + " [ -z \"$BACKUP\" ] || rm -rf \"$BACKUP\";"
+                + " else"
+                + " rm -rf '\(escapedDestination)' 2>/dev/null;"
+                + " [ -z \"$BACKUP\" ] || mv \"$BACKUP\" '\(escapedDestination)';"
+                + " exit 1;"
+                + " fi",
+        ].joined(separator: " && ")
 
         // Escape characters significant in an AppleScript double-quoted string literal.
         let escapedShellCommand = shellCommand
