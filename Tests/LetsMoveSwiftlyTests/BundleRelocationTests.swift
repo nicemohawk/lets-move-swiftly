@@ -52,8 +52,6 @@ private class RelocationFailingFileManager: FileManager {
 
 /// A `FileManager` subclass that fails both the relocation *and* the backup
 /// restoration, exercising the `RelocationError` double-failure path.
-/// A `FileManager` subclass that fails both the relocation *and* the backup
-/// restoration, exercising the `RelocationError` double-failure path.
 private class DoubleFailingFileManager: FileManager {
     let targetAppName: String
 
@@ -93,8 +91,6 @@ private class DoubleFailingFileManager: FileManager {
     }
 }
 
-/// A `FileManager` subclass that writes a partial target (creates the directory
-/// but then fails), exercising the partial-copy cleanup path.
 /// A `FileManager` subclass that writes a partial target (creates the directory
 /// but then fails), exercising the partial-copy cleanup path before restore.
 private class PartialCopyFileManager: FileManager {
