@@ -123,6 +123,29 @@ public enum LetsMoveSwiftly {
         return normalizedPath.hasPrefix("/Applications/") || normalizedPath.hasPrefix(userApplicationsFolder)
     }
 
+    // MARK: - Errors
+
+    /// An error thrown when `relocateBundle` fails to move/copy the bundle *and* the automatic
+    /// backup restoration also fails, leaving the destination in an uncertain state.
+    public struct RelocationError: LocalizedError {
+        /// The error from the failed relocation attempt.
+        public let relocationError: Error
+        /// The error from the failed backup restoration attempt.
+        public let restorationError: Error
+        /// The URL where the backup remains on disk.
+        public let backupURL: URL
+
+        public var errorDescription: String? {
+            "Relocation failed (\(relocationError.localizedDescription)) and backup restoration"
+                + " also failed (\(restorationError.localizedDescription));"
+                + " the existing app backup remains at \(backupURL.path)."
+        }
+
+        public var recoverySuggestion: String? {
+            "You can manually restore the previous version from \(backupURL.path)."
+        }
+    }
+
     // MARK: - File Operations
 
     /// Moves or copies the app bundle into the destination directory.
@@ -131,14 +154,18 @@ public enum LetsMoveSwiftly {
     /// the bundle is **moved**. When the source is read-only (e.g., a mounted DMG), the bundle is
     /// **copied** instead.
     ///
-    /// If an app with the same name already exists at the destination, it is removed first.
+    /// If an app with the same name already exists at the destination, it is moved aside to a
+    /// temporary backup before the operation. On success the backup is removed; on failure the
+    /// backup is restored, leaving the user's existing install intact.
     ///
     /// - Parameters:
     ///   - source: The current app bundle URL (e.g., `Bundle.main.bundleURL`).
     ///   - destinationDirectory: The target directory (typically `/Applications`).
     ///   - fileManager: The file manager to use for file operations. Defaults to `.default`.
     /// - Returns: The URL of the app in its new location.
-    /// - Throws: Any `FileManager` error if the move/copy or cleanup fails.
+    /// - Throws: A `FileManager` error if the move/copy fails (the existing app is restored
+    ///   automatically), or a ``RelocationError`` if both the relocation *and* the backup
+    ///   restoration fail.
     @discardableResult
     public static func relocateBundle(
         from source: URL,
@@ -147,17 +174,52 @@ public enum LetsMoveSwiftly {
     ) throws -> URL {
         let targetURL = destinationDirectory.appendingPathComponent(source.lastPathComponent)
 
-        // Remove an existing copy so the move/copy doesn't fail with "file exists".
-        if fileManager.fileExists(atPath: targetURL.path) {
-            try fileManager.removeItem(at: targetURL)
+        // Move any existing app aside so we can restore it if the operation fails.
+        // Attempt the move unconditionally and handle "not found" gracefully to
+        // avoid a TOCTOU race between checking existence and moving.
+        var backupURL: URL?
+        let backup = destinationDirectory
+            .appendingPathComponent("\(targetURL.lastPathComponent).backup-\(UUID().uuidString.prefix(8))")
+        do {
+            try fileManager.moveItem(at: targetURL, to: backup)
+            backupURL = backup
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain
+            && error.code == NSFileNoSuchFileError {
+            // No existing app at the destination — nothing to back up.
         }
 
-        let sourceDirectory = source.deletingLastPathComponent().path
-        if fileManager.isWritableFile(atPath: sourceDirectory) {
-            try fileManager.moveItem(at: source, to: targetURL)
-        } else {
-            // Read-only source (e.g., mounted DMG) — copy instead.
-            try fileManager.copyItem(at: source, to: targetURL)
+        do {
+            let sourceDirectory = source.deletingLastPathComponent().path
+            if fileManager.isWritableFile(atPath: sourceDirectory) {
+                try fileManager.moveItem(at: source, to: targetURL)
+            } else {
+                // Read-only source (e.g., mounted DMG) — copy instead.
+                try fileManager.copyItem(at: source, to: targetURL)
+            }
+        } catch {
+            // Restore the backup so the user's existing install is not lost.
+            if let backup = backupURL {
+                // Remove any partially-written target (e.g. from an interrupted copy)
+                // so the backup can be moved back into place.
+                if fileManager.fileExists(atPath: targetURL.path) {
+                    try? fileManager.removeItem(at: targetURL)
+                }
+                do {
+                    try fileManager.moveItem(at: backup, to: targetURL)
+                } catch let restorationError {
+                    throw RelocationError(
+                        relocationError: error,
+                        restorationError: restorationError,
+                        backupURL: backup
+                    )
+                }
+            }
+            throw error
+        }
+
+        // Success — discard the backup.
+        if let backup = backupURL {
+            try? fileManager.removeItem(at: backup)
         }
 
         return targetURL
@@ -212,7 +274,7 @@ public enum LetsMoveSwiftly {
 
         if let errorInfo {
             // Error -128 is userCanceledErr — the user dismissed the auth dialog.
-            if (errorInfo[NSAppleScript.errorNumber] as? Int16) == -128 {
+            if (errorInfo[NSAppleScript.errorNumber] as? Int) == -128 {
                 return .cancelled
             }
             let message = errorInfo[NSAppleScript.errorMessage] as? String
@@ -227,6 +289,11 @@ public enum LetsMoveSwiftly {
 
     /// Builds the AppleScript source string for an admin-privileged relocate.
     ///
+    /// The generated shell script moves any existing app aside to a backup path before
+    /// copying the new bundle. On success the backup is removed; on failure any partial
+    /// copy is cleaned up and the backup is restored, mirroring the safety pattern used
+    /// by ``relocateBundle(from:to:fileManager:)``.
+    ///
     /// Paths are escaped for both the shell layer (single quotes) and the AppleScript
     /// string literal (backslashes and double quotes) to prevent injection.
     static func appleScriptForRelocate(sourcePath: String, destinationPath: String) -> String {
@@ -234,7 +301,22 @@ public enum LetsMoveSwiftly {
             path.replacingOccurrences(of: "'", with: "'\\''")
         }
 
-        let shellCommand = "rm -rf '\(shellEscape(destinationPath))' && cp -pR '\(shellEscape(sourcePath))' '\(shellEscape(destinationPath))'"
+        let escapedSource = shellEscape(sourcePath)
+        let escapedDestination = shellEscape(destinationPath)
+        let backupSuffix = UUID().uuidString.prefix(8)
+        let escapedBackup = shellEscape("\(destinationPath).backup-\(backupSuffix)")
+
+        let shellCommand = [
+            "BACKUP='\(escapedBackup)'",
+            "if [ -e '\(escapedDestination)' ]; then mv '\(escapedDestination)' \"$BACKUP\"; else BACKUP=''; fi",
+            "if cp -pR '\(escapedSource)' '\(escapedDestination)'; then"
+                + " [ -z \"$BACKUP\" ] || rm -rf \"$BACKUP\";"
+                + " else"
+                + " rm -rf '\(escapedDestination)' 2>/dev/null;"
+                + " [ -z \"$BACKUP\" ] || mv \"$BACKUP\" '\(escapedDestination)';"
+                + " exit 1;"
+                + " fi",
+        ].joined(separator: " && ")
 
         // Escape characters significant in an AppleScript double-quoted string literal.
         let escapedShellCommand = shellCommand
