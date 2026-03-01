@@ -4,20 +4,31 @@ import XCTest
 
 // MARK: - Test Doubles
 
-/// A `FileManager` subclass that allows backup and restore moves but forces the
-/// relocation move/copy to fail, so tests can exercise the rollback/restore path.
+/// A `FileManager` subclass that fails the relocation move/copy but allows the
+/// backup and restore moves, identified by URL rather than call order.
 ///
-/// Call sequence in `relocateBundle`:
-///   1. `moveItem` — backup (existing app → backup path) — allowed
-///   2. `moveItem`/`copyItem` — relocation (source → target) — **fails**
-///   3. `moveItem` — restore (backup → original path) — allowed
+/// Set `targetAppName` to the `.app` bundle name at the destination. Any
+/// `moveItem`/`copyItem` call whose destination matches that name (i.e. the
+/// relocation step) will throw.
 private class RelocationFailingFileManager: FileManager {
-    private var moveCallCount = 0
+    let targetAppName: String
+
+    init(targetAppName: String = "TestApp.app") {
+        self.targetAppName = targetAppName
+        super.init()
+    }
+
+    required init?(coder: NSCoder) { fatalError("Not supported") }
+
+    /// The relocation step moves/copies INTO the target name from a non-backup source.
+    /// The restore step also targets the same name but comes FROM a `.backup-` path.
+    private func isRelocation(source: URL, destination: URL) -> Bool {
+        destination.lastPathComponent == targetAppName
+            && !source.path.contains(".backup-")
+    }
 
     override func moveItem(at srcURL: URL, to dstURL: URL) throws {
-        moveCallCount += 1
-        if moveCallCount == 2 {
-            // Second moveItem is the relocation — force it to fail.
+        if isRelocation(source: srcURL, destination: dstURL) {
             throw NSError(
                 domain: NSCocoaErrorDomain,
                 code: NSFileWriteNoPermissionError,
@@ -28,12 +39,103 @@ private class RelocationFailingFileManager: FileManager {
     }
 
     override func copyItem(at srcURL: URL, to dstURL: URL) throws {
-        // If this is reached after backup, it's the relocation copy — fail it.
-        if moveCallCount >= 1 {
+        if isRelocation(source: srcURL, destination: dstURL) {
             throw NSError(
                 domain: NSCocoaErrorDomain,
                 code: NSFileWriteNoPermissionError,
                 userInfo: [NSLocalizedDescriptionKey: "Simulated relocation failure"]
+            )
+        }
+        try super.copyItem(at: srcURL, to: dstURL)
+    }
+}
+
+/// A `FileManager` subclass that fails both the relocation *and* the backup
+/// restoration, exercising the `RelocationError` double-failure path.
+/// A `FileManager` subclass that fails both the relocation *and* the backup
+/// restoration, exercising the `RelocationError` double-failure path.
+private class DoubleFailingFileManager: FileManager {
+    let targetAppName: String
+
+    init(targetAppName: String = "TestApp.app") {
+        self.targetAppName = targetAppName
+        super.init()
+    }
+
+    required init?(coder: NSCoder) { fatalError("Not supported") }
+
+    /// Any move/copy whose destination is the target app name fails — both the
+    /// relocation (from source) and the restore (from backup).
+    private func isTargetDestination(_ url: URL) -> Bool {
+        url.lastPathComponent == targetAppName && !url.path.contains(".backup-")
+    }
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        if isTargetDestination(dstURL) {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileWriteNoPermissionError,
+                userInfo: [NSLocalizedDescriptionKey: "Simulated failure"]
+            )
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+    }
+
+    override func copyItem(at srcURL: URL, to dstURL: URL) throws {
+        if isTargetDestination(dstURL) {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileWriteNoPermissionError,
+                userInfo: [NSLocalizedDescriptionKey: "Simulated failure"]
+            )
+        }
+        try super.copyItem(at: srcURL, to: dstURL)
+    }
+}
+
+/// A `FileManager` subclass that writes a partial target (creates the directory
+/// but then fails), exercising the partial-copy cleanup path.
+/// A `FileManager` subclass that writes a partial target (creates the directory
+/// but then fails), exercising the partial-copy cleanup path before restore.
+private class PartialCopyFileManager: FileManager {
+    let targetAppName: String
+
+    init(targetAppName: String = "TestApp.app") {
+        self.targetAppName = targetAppName
+        super.init()
+    }
+
+    required init?(coder: NSCoder) { fatalError("Not supported") }
+
+    private func isRelocation(source: URL, destination: URL) -> Bool {
+        destination.lastPathComponent == targetAppName
+            && !source.path.contains(".backup-")
+    }
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        if isRelocation(source: srcURL, destination: dstURL) {
+            // Simulate a partial write: create the target directory, then fail.
+            try FileManager.default.createDirectory(
+                at: dstURL, withIntermediateDirectories: true
+            )
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileWriteOutOfSpaceError,
+                userInfo: [NSLocalizedDescriptionKey: "Simulated out-of-space failure"]
+            )
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+    }
+
+    override func copyItem(at srcURL: URL, to dstURL: URL) throws {
+        if isRelocation(source: srcURL, destination: dstURL) {
+            try FileManager.default.createDirectory(
+                at: dstURL, withIntermediateDirectories: true
+            )
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileWriteOutOfSpaceError,
+                userInfo: [NSLocalizedDescriptionKey: "Simulated out-of-space failure"]
             )
         }
         try super.copyItem(at: srcURL, to: dstURL)
@@ -266,6 +368,80 @@ final class BundleRelocationTests: XCTestCase {
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: existingApp.path),
             "Existing app should be restored after a failed relocation"
+        )
+        let content = try String(
+            contentsOf: existingApp.appendingPathComponent("Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(content, "old-version", "Restored app should contain the original content")
+    }
+
+    func testThrowsRelocationErrorWhenBothRelocationAndRestorationFail() throws {
+        let appBundle = try createFakeAppBundle(in: "source", markerContent: "new-version")
+        let destinationDirectory = try createDirectory("destination")
+
+        // Place an existing app so the backup path is exercised.
+        let existingApp = destinationDirectory.appendingPathComponent("TestApp.app")
+        try FileManager.default.createDirectory(at: existingApp, withIntermediateDirectories: true)
+        try "old-version".write(
+            to: existingApp.appendingPathComponent("Info.plist"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let doubleFailingFileManager = DoubleFailingFileManager()
+
+        XCTAssertThrowsError(
+            try LetsMoveSwiftly.relocateBundle(
+                from: appBundle,
+                to: destinationDirectory,
+                fileManager: doubleFailingFileManager
+            ),
+            "Should throw when both relocation and restoration fail"
+        ) { error in
+            guard let relocationError = error as? LetsMoveSwiftly.RelocationError else {
+                XCTFail("Expected RelocationError, got \(type(of: error)): \(error)")
+                return
+            }
+            XCTAssertTrue(
+                relocationError.backupURL.path.contains(".backup-"),
+                "backupURL should point to the backup location"
+            )
+            XCTAssertNotNil(relocationError.errorDescription, "Should provide a localized description")
+            XCTAssertNotNil(relocationError.recoverySuggestion, "Should provide a recovery suggestion")
+        }
+    }
+
+    func testCleansUpPartialCopyBeforeRestoringBackup() throws {
+        let appBundle = try createFakeAppBundle(in: "source", markerContent: "new-version")
+        let destinationDirectory = try createDirectory("destination")
+
+        // Place an existing app so the backup path is exercised.
+        let existingApp = destinationDirectory.appendingPathComponent("TestApp.app")
+        try FileManager.default.createDirectory(at: existingApp, withIntermediateDirectories: true)
+        try "old-version".write(
+            to: existingApp.appendingPathComponent("Info.plist"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        // This file manager creates a partial target directory before failing,
+        // verifying the cleanup-before-restore logic.
+        let partialCopyFileManager = PartialCopyFileManager()
+
+        XCTAssertThrowsError(
+            try LetsMoveSwiftly.relocateBundle(
+                from: appBundle,
+                to: destinationDirectory,
+                fileManager: partialCopyFileManager
+            ),
+            "Should throw when copy fails"
+        )
+
+        // The original app must be restored despite the partial copy.
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: existingApp.path),
+            "Existing app should be restored after partial copy failure"
         )
         let content = try String(
             contentsOf: existingApp.appendingPathComponent("Info.plist"),

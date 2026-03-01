@@ -175,12 +175,17 @@ public enum LetsMoveSwiftly {
         let targetURL = destinationDirectory.appendingPathComponent(source.lastPathComponent)
 
         // Move any existing app aside so we can restore it if the operation fails.
+        // Attempt the move unconditionally and handle "not found" gracefully to
+        // avoid a TOCTOU race between checking existence and moving.
         var backupURL: URL?
-        if fileManager.fileExists(atPath: targetURL.path) {
-            let backup = destinationDirectory
-                .appendingPathComponent("\(targetURL.lastPathComponent).backup-\(UUID().uuidString.prefix(8))")
+        let backup = destinationDirectory
+            .appendingPathComponent("\(targetURL.lastPathComponent).backup-\(UUID().uuidString.prefix(8))")
+        do {
             try fileManager.moveItem(at: targetURL, to: backup)
             backupURL = backup
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain
+            && error.code == NSFileNoSuchFileError {
+            // No existing app at the destination — nothing to back up.
         }
 
         do {
@@ -269,7 +274,7 @@ public enum LetsMoveSwiftly {
 
         if let errorInfo {
             // Error -128 is userCanceledErr — the user dismissed the auth dialog.
-            if (errorInfo[NSAppleScript.errorNumber] as? Int16) == -128 {
+            if (errorInfo[NSAppleScript.errorNumber] as? Int) == -128 {
                 return .cancelled
             }
             let message = errorInfo[NSAppleScript.errorMessage] as? String
